@@ -25,6 +25,11 @@ const API_SITES = {
         name: '非凡影视',
         detail: 'http://ffzy5.tv',
     },
+    hwb: {
+        api: 'https://cjhwba.com',
+        name: '华为吧',
+        detail: 'https://cjhwba.com',
+    },
     
 };
 
