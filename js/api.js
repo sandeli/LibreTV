@@ -15,8 +15,13 @@ async function handleApiRequest(url) {
                 throw new Error('使用自定义API时必须提供API地址');
             }
             
-            if (!API_SITES[source] && source !== 'custom') {
+            if (!API_SITES[source] && source !== 'custom' && source !== 'aggregated') {
                 throw new Error('无效的API来源');
+            }
+            
+            // 处理聚合搜索
+            if (source === 'aggregated') {
+                return await handleAggregatedSearch(searchQuery);
             }
             
             const apiUrl = customApi
@@ -46,6 +51,12 @@ async function handleApiRequest(url) {
                     throw new Error('API返回的数据格式无效');
                 }
                 
+                // 添加源信息到每个结果
+                data.list.forEach(item => {
+                    item.source_name = source === 'custom' ? '自定义源' : API_SITES[source].name;
+                    item.source_code = source;
+                });
+                
                 return JSON.stringify({
                     code: 200,
                     list: data.list || [],
@@ -56,8 +67,11 @@ async function handleApiRequest(url) {
             }
         }
 
+        // 聚合搜索的详情处理 - 需要根据存储在数据中的源信息获取
         if (url.pathname === '/api/detail') {
             const id = url.searchParams.get('id');
+            const sourceCode = url.searchParams.get('source') || 'heimuer'; // 获取源代码
+            
             if (!id) {
                 throw new Error('缺少视频ID参数');
             }
@@ -68,17 +82,22 @@ async function handleApiRequest(url) {
             }
 
             // 验证API和source的有效性
-            if (source === 'custom' && !customApi) {
+            if (sourceCode === 'custom' && !customApi) {
                 throw new Error('使用自定义API时必须提供API地址');
             }
             
-            if (!API_SITES[source] && source !== 'custom') {
+            if (!API_SITES[sourceCode] && sourceCode !== 'custom') {
                 throw new Error('无效的API来源');
             }
 
+            // 对于ffzy源，使用特殊处理方式
+            if (sourceCode === 'ffzy' && API_SITES[sourceCode].detail) {
+                return await handleFFZYDetail(id, sourceCode);
+            }
+
             const detailUrl = customApi
-                ? `${customApi}${API_CONFIG.detail.path}${id}.html`
-                : `${API_SITES[source].detail}${API_CONFIG.detail.path}${id}.html`;
+                ? `${customApi}${API_CONFIG.detail.path}${id}`
+                : `${API_SITES[sourceCode].api}${API_CONFIG.detail.path}${id}`;
             
             // 添加超时处理
             const controller = new AbortController();
@@ -96,37 +115,63 @@ async function handleApiRequest(url) {
                     throw new Error(`详情请求失败: ${response.status}`);
                 }
                 
-                const html = await response.text();
-                if (!html || html.length < 100) {
+                // 由于现在返回的是JSON而不是HTML，我们需要解析JSON
+                const data = await response.json();
+                
+                // 检查返回的数据是否有效
+                if (!data || !data.list || !Array.isArray(data.list) || data.list.length === 0) {
                     throw new Error('获取到的详情内容无效');
                 }
                 
-                const matches = html.match(M3U8_PATTERN) || [];
+                // 获取第一个匹配的视频详情
+                const videoDetail = data.list[0];
                 
-                // 改进的URL清理
-                const cleanUrls = matches.map(link => {
-                    try {
-                        // 去除各种引号和前缀
-                        let cleanLink = link.replace(/^\$/, '')
-                                           .replace(/^["']+/, '')
-                                           .replace(/["']+$/, '');
+                // 提取播放地址
+                let episodes = [];
+                
+                if (videoDetail.vod_play_url) {
+                    // 分割不同播放源
+                    const playSources = videoDetail.vod_play_url.split('$$$');
+                    
+                    // 提取第一个播放源的集数（通常为主要源）
+                    if (playSources.length > 0) {
+                        const mainSource = playSources[0];
+                        const episodeList = mainSource.split('#');
                         
-                        // 处理可能嵌在括号中的URL
-                        if (cleanLink.includes('(') && cleanLink.includes(')')) {
-                            cleanLink = cleanLink.split(')')[0].split('(').pop();
-                        }
-                        
-                        // 确保链接是http或https开头
-                        return (cleanLink.startsWith('http://') || cleanLink.startsWith('https://')) ? cleanLink : '';
-                    } catch (e) {
-                        return '';
+                        // 从每个集数中提取URL
+                        episodes = episodeList.map(ep => {
+                            const parts = ep.split('$');
+                            // 返回URL部分(通常是第二部分，如果有的话)
+                            return parts.length > 1 ? parts[1] : '';
+                        }).filter(url => url && (url.startsWith('http://') || url.startsWith('https://')));
                     }
-                }).filter(link => link); // 过滤掉空URL
-
+                }
+                
+                // 如果没有找到播放地址，尝试使用正则表达式查找m3u8链接
+                if (episodes.length === 0 && videoDetail.vod_content) {
+                    const matches = videoDetail.vod_content.match(M3U8_PATTERN) || [];
+                    episodes = matches.map(link => link.replace(/^\$/, ''));
+                }
+                
                 return JSON.stringify({
                     code: 200,
-                    episodes: cleanUrls,
+                    episodes: episodes,
                     detailUrl: detailUrl,
+                    // 添加更多视频详情，以便前端展示
+                    videoInfo: {
+                        title: videoDetail.vod_name,
+                        cover: videoDetail.vod_pic,
+                        desc: videoDetail.vod_content,
+                        type: videoDetail.type_name,
+                        year: videoDetail.vod_year,
+                        area: videoDetail.vod_area,
+                        director: videoDetail.vod_director,
+                        actor: videoDetail.vod_actor,
+                        remarks: videoDetail.vod_remarks,
+                        // 添加源信息
+                        source_name: sourceCode === 'custom' ? '自定义源' : API_SITES[sourceCode].name,
+                        source_code: sourceCode
+                    }
                 });
             } catch (fetchError) {
                 clearTimeout(timeoutId);
@@ -142,6 +187,188 @@ async function handleApiRequest(url) {
             msg: error.message || '请求处理失败',
             list: [],
             episodes: [],
+        });
+    }
+}
+
+// 添加: 处理非凡影视详情的特殊函数
+async function handleFFZYDetail(id, sourceCode) {
+    try {
+        // 构建详情页URL（使用配置中的detail URL而不是api URL）
+        const detailUrl = `${API_SITES[sourceCode].detail}/index.php/vod/detail/id/${id}.html`;
+        
+        // 添加超时处理
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 10000);
+        
+        // 获取详情页HTML
+        const response = await fetch(PROXY_URL + encodeURIComponent(detailUrl), {
+            headers: {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+            },
+            signal: controller.signal
+        });
+        
+        clearTimeout(timeoutId);
+        
+        if (!response.ok) {
+            throw new Error(`详情页请求失败: ${response.status}`);
+        }
+        
+        // 获取HTML内容
+        const html = await response.text();
+        
+        // 非凡影视使用不同的正则表达式
+        const ffzyPattern = /\$(https?:\/\/[^"'\s]+?\/\d{8}\/\d+_[a-f0-9]+\/index\.m3u8)/g;
+        let matches = html.match(ffzyPattern) || [];
+
+        // 处理可能包含括号的链接
+        matches = matches.map(link => {
+            link = link.substring(1, link.length);
+            const parenIndex = link.indexOf('(');
+            return parenIndex > 0 ? link.substring(0, parenIndex) : link;
+        });
+
+        // 如果没有找到链接，尝试一个更通用的模式
+        if (matches.length === 0) {
+            const generalPattern = /\$(https?:\/\/[^"'\s]+?\.m3u8)/g;
+            matches = html.match(generalPattern) || [];
+            matches = matches.map(link => {
+                link = link.substring(1, link.length);
+                const parenIndex = link.indexOf('(');
+                return parenIndex > 0 ? link.substring(0, parenIndex) : link;
+            });
+        }
+        
+        // 提取可能存在的标题、简介等基本信息
+        // 这些正则可能需要根据网站实际HTML结构调整
+        const titleMatch = html.match(/<h1[^>]*>([^<]+)<\/h1>/);
+        const titleText = titleMatch ? titleMatch[1].trim() : '';
+        
+        const descMatch = html.match(/<div[^>]*class=["']sketch["'][^>]*>([\s\S]*?)<\/div>/);
+        const descText = descMatch ? descMatch[1].replace(/<[^>]+>/g, ' ').trim() : '';
+        
+        return JSON.stringify({
+            code: 200,
+            episodes: matches,
+            detailUrl: detailUrl,
+            videoInfo: {
+                title: titleText,
+                desc: descText,
+                source_name: API_SITES[sourceCode].name,
+                source_code: sourceCode
+            }
+        });
+    } catch (error) {
+        console.error('非凡影视详情获取失败:', error);
+        throw error;
+    }
+}
+
+// 新增: 处理聚合搜索
+async function handleAggregatedSearch(searchQuery) {
+    // 获取可用的API源列表（排除aggregated和custom）
+    const availableSources = Object.keys(API_SITES).filter(key => 
+        key !== 'aggregated' && key !== 'custom'
+    );
+    
+    if (availableSources.length === 0) {
+        throw new Error('没有可用的API源');
+    }
+    
+    // 创建所有API源的搜索请求
+    const searchPromises = availableSources.map(async (source) => {
+        try {
+            const apiUrl = `${API_SITES[source].api}${API_CONFIG.search.path}${encodeURIComponent(searchQuery)}`;
+            
+            // 使用Promise.race添加超时处理
+            const timeoutPromise = new Promise((_, reject) => 
+                setTimeout(() => reject(new Error(`${source}源搜索超时`)), 8000)
+            );
+            
+            const fetchPromise = fetch(PROXY_URL + encodeURIComponent(apiUrl), {
+                headers: API_CONFIG.search.headers
+            });
+            
+            const response = await Promise.race([fetchPromise, timeoutPromise]);
+            
+            if (!response.ok) {
+                throw new Error(`${source}源请求失败: ${response.status}`);
+            }
+            
+            const data = await response.json();
+            
+            if (!data || !Array.isArray(data.list)) {
+                throw new Error(`${source}源返回的数据格式无效`);
+            }
+            
+            // 为搜索结果添加源信息
+            const results = data.list.map(item => ({
+                ...item,
+                source_name: API_SITES[source].name,
+                source_code: source
+            }));
+            
+            return results;
+        } catch (error) {
+            console.warn(`${source}源搜索失败:`, error);
+            return []; // 返回空数组表示该源搜索失败
+        }
+    });
+    
+    try {
+        // 并行执行所有搜索请求
+        const resultsArray = await Promise.all(searchPromises);
+        
+        // 合并所有结果
+        let allResults = [];
+        resultsArray.forEach(results => {
+            if (Array.isArray(results) && results.length > 0) {
+                allResults = allResults.concat(results);
+            }
+        });
+        
+        // 如果没有搜索结果，返回空结果
+        if (allResults.length === 0) {
+            return JSON.stringify({
+                code: 200,
+                list: [],
+                msg: '所有源均无搜索结果'
+            });
+        }
+        
+        // 去重（根据vod_id和source_code组合）
+        const uniqueResults = [];
+        const seen = new Set();
+        
+        allResults.forEach(item => {
+            const key = `${item.source_code}_${item.vod_id}`;
+            if (!seen.has(key)) {
+                seen.add(key);
+                uniqueResults.push(item);
+            }
+        });
+        
+        // 按照视频名称和来源排序
+        uniqueResults.sort((a, b) => {
+            // 首先按照视频名称排序
+            const nameCompare = (a.vod_name || '').localeCompare(b.vod_name || '');
+            if (nameCompare !== 0) return nameCompare;
+            
+            // 如果名称相同，则按照来源排序
+            return (a.source_name || '').localeCompare(b.source_name || '');
+        });
+        
+        return JSON.stringify({
+            code: 200,
+            list: uniqueResults,
+        });
+    } catch (error) {
+        console.error('聚合搜索处理错误:', error);
+        return JSON.stringify({
+            code: 400,
+            msg: '聚合搜索处理失败: ' + error.message,
+            list: []
         });
     }
 }

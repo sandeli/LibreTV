@@ -18,24 +18,46 @@ const API_SITES = {
     heimuer: {
         api: 'https://json.heimuer.xyz',
         name: '黑木耳',
-        detail: 'https://heimuer.tv',
+        detail: 'https://heimuer.tv'
     },
     ffzy: {
         api: 'http://ffzy5.tv',
         name: '非凡影视',
-        detail: 'http://ffzy5.tv',
+        detail: 'http://ffzy5.tv'
     },
     tyyszy: {
         api: 'https://tyyszy.com',
         name: '天涯资源',
-        detail: 'https://tyyszy.com',
     },
     ckzy: {
         api: 'https://www.ckzy1.com',
         name: 'CK资源',
-        detail: 'https://www.ckzy1.com',
     },
-    
+    zy360: {
+        api: 'https://360zy.com',
+        name: '360资源',
+    },
+    wolong: {
+        api: 'https://wolongzyw.com',
+        name: '卧龙资源',
+    },
+    cjhw: {
+        api: 'https://cjhwba.com',
+        name: '新华为',
+    },
+    dbzy: {
+        api: 'https://dbzy.com',
+        name: '豆瓣资源',
+    }
+};
+
+// 添加聚合搜索的配置选项
+const AGGREGATED_SEARCH_CONFIG = {
+    enabled: true,             // 是否启用聚合搜索
+    timeout: 8000,            // 单个源超时时间（毫秒）
+    maxResults: 10000,          // 最大结果数量
+    parallelRequests: true,   // 是否并行请求所有源
+    showSourceBadges: true    // 是否显示来源徽章
 };
 
 // 抽象API请求配置
@@ -49,9 +71,11 @@ const API_CONFIG = {
         }
     },
     detail: {
-        path: '/index.php/vod/detail/id/',
+        // 修改详情接口也使用videolist接口，但是通过ID查询，减少请求次数
+        path: '/api.php/provide/vod/?ac=videolist&ids=',
         headers: {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36'
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+            'Accept': 'application/json'
         }
     }
 };
@@ -69,7 +93,8 @@ const PLAYER_CONFIG = {
     width: '100%',
     height: '600',
     timeout: 15000,  // 播放器加载超时时间
-    filterAds: true  // 是否启用广告过滤
+    filterAds: true,  // 是否启用广告过滤
+    autoPlayNext: true  // 默认启用自动连播功能
 };
 
 // 增加错误信息本地化
