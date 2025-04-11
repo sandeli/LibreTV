@@ -10,12 +10,23 @@ let currentVideoTitle = '';
 // 新增全局变量用于倒序状态
 let episodesReversed = false;
 
+// 新增：解析多个自定义API源
+let customApiUrls = [];
+function parseCustomApiUrls() {
+    if (!customApiUrl) return [];
+    return customApiUrl.split(CUSTOM_API_CONFIG.separator)
+        .map(url => url.trim())
+        .filter(url => url.length > 0)
+        .slice(0, CUSTOM_API_CONFIG.maxSources);
+}
+
 // 页面初始化
 document.addEventListener('DOMContentLoaded', function() {
     // 初始化时检查是否使用自定义接口
     if (currentApiSource === 'custom') {
         document.getElementById('customApiInput').classList.remove('hidden');
         document.getElementById('customApiUrl').value = customApiUrl;
+        customApiUrls = parseCustomApiUrls();
     }
 
     // 设置 select 的默认选中值
@@ -30,6 +41,18 @@ document.addEventListener('DOMContentLoaded', function() {
     // 渲染搜索历史
     renderSearchHistory();
     
+    // 设置黄色内容过滤开关初始状态
+    const yellowFilterToggle = document.getElementById('yellowFilterToggle');
+    if (yellowFilterToggle) {
+        yellowFilterToggle.checked = localStorage.getItem('yellowFilterEnabled') === 'true';
+    }
+    
+    // 设置广告过滤开关初始状态
+    const adFilterToggle = document.getElementById('adFilterToggle');
+    if (adFilterToggle) {
+        adFilterToggle.checked = localStorage.getItem(PLAYER_CONFIG.adFilteringStorage) !== 'false'; // 默认为true
+    }
+    
     // 设置事件监听器
     setupEventListeners();
 });
@@ -38,6 +61,33 @@ document.addEventListener('DOMContentLoaded', function() {
 async function updateSiteStatusWithTest(source) {
     // 显示加载状态
     document.getElementById('siteStatus').innerHTML = '<span class="text-gray-500">●</span> 测试中...';
+    
+    // 自定义API源特殊处理 - 测试所有提供的API
+    if (source === 'custom') {
+        const urls = parseCustomApiUrls();
+        if (urls.length === 0) {
+            updateSiteStatus(false);
+            document.getElementById('siteStatus').innerHTML = '<span class="text-gray-500">●</span> 未设置API';
+            return;
+        }
+        
+        // 测试所有API并返回可用的数量
+        const results = await Promise.all(
+            urls.map(url => testCustomApiUrl(url))
+        );
+        
+        const availableCount = results.filter(r => r).length;
+        if (availableCount > 0) {
+            updateSiteStatus(true);
+            document.getElementById('siteStatus').innerHTML = 
+                `<span class="text-green-500">●</span> ${availableCount}/${urls.length} 可用`;
+        } else {
+            updateSiteStatus(false);
+            document.getElementById('siteStatus').innerHTML = 
+                `<span class="text-red-500">●</span> 全部不可用`;
+        }
+        return;
+    }
     
     // 检查缓存中是否有有效的测试结果
     const cacheKey = `siteStatus_${source}_${customApiUrl || ''}`;
@@ -80,6 +130,62 @@ async function updateSiteStatusWithTest(source) {
     }
 }
 
+// 新增：测试单个自定义API URL
+async function testCustomApiUrl(url) {
+    if (!url) return false;
+    
+    // 验证URL格式
+    if (CUSTOM_API_CONFIG.validateUrl && !/^https?:\/\/.+/.test(url)) {
+        return false;
+    }
+    
+    // 检查缓存
+    if (CUSTOM_API_CONFIG.cacheResults) {
+        const cacheKey = `api_test_${url}`;
+        const cachedResult = localStorage.getItem(cacheKey);
+        if (cachedResult) {
+            try {
+                const { isAvailable, timestamp } = JSON.parse(cachedResult);
+                if (Date.now() - timestamp < CUSTOM_API_CONFIG.cacheExpiry) {
+                    return isAvailable;
+                }
+            } catch (e) {
+                console.error('缓存解析错误:', e);
+            }
+        }
+    }
+    
+    try {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(
+            () => controller.abort(), 
+            CUSTOM_API_CONFIG.testTimeout
+        );
+        
+        // 使用wd=test为参数进行简单搜索测试
+        const response = await fetch('/api/search?wd=test&customApi=' + encodeURIComponent(url), {
+            signal: controller.signal
+        });
+        
+        clearTimeout(timeoutId);
+        
+        const result = response.ok;
+        
+        // 缓存结果
+        if (CUSTOM_API_CONFIG.cacheResults) {
+            localStorage.setItem(`api_test_${url}`, JSON.stringify({
+                isAvailable: result,
+                timestamp: Date.now()
+            }));
+        }
+        
+        return result;
+    } catch (e) {
+        console.error(`自定义API测试失败(${url}):`, e);
+        return false;
+    }
+}
+
 // 设置事件监听器
 function setupEventListeners() {
     // API源选择变更事件
@@ -91,6 +197,7 @@ function setupEventListeners() {
             customApiInput.classList.remove('hidden');
             customApiUrl = document.getElementById('customApiUrl').value;
             localStorage.setItem('customApiUrl', customApiUrl);
+            customApiUrls = parseCustomApiUrls();
             // 自定义接口不立即测试可用性
             document.getElementById('siteStatus').innerHTML = '<span class="text-gray-500">●</span> 待测试';
         } else {
@@ -107,20 +214,22 @@ function setupEventListeners() {
         resetSearchArea();
     });
 
-    // 自定义接口输入框事件
+    // 自定义接口输入框事件 - 更新为支持多个API
     document.getElementById('customApiUrl').addEventListener('blur', async function(e) {
         customApiUrl = e.target.value;
         localStorage.setItem('customApiUrl', customApiUrl);
         
         if (currentApiSource === 'custom' && customApiUrl) {
-            showToast('正在测试接口可用性...', 'info');
-            const isAvailable = await testSiteAvailability('custom');
-            updateSiteStatus(isAvailable);
+            showToast('正在测试API可用性...', 'info');
+            customApiUrls = parseCustomApiUrls();
             
-            if (!isAvailable) {
-                showToast('接口不可用，请检查地址是否正确', 'error');
+            // 测试所有配置的API
+            if (customApiUrls.length > 0) {
+                updateSiteStatusWithTest('custom');
             } else {
-                showToast('接口可用', 'success');
+                document.getElementById('siteStatus').innerHTML = 
+                    '<span class="text-gray-500">●</span> 未设置API';
+                showToast('请输入至少一个有效的API地址', 'warning');
             }
         }
     });
@@ -141,6 +250,22 @@ function setupEventListeners() {
             panel.classList.remove('show');
         }
     });
+    
+    // 新增：黄色内容过滤开关事件绑定
+    const yellowFilterToggle = document.getElementById('yellowFilterToggle');
+    if (yellowFilterToggle) {
+        yellowFilterToggle.addEventListener('change', function(e) {
+            localStorage.setItem('yellowFilterEnabled', e.target.checked);
+        });
+    }
+    
+    // 新增：广告过滤开关事件绑定
+    const adFilterToggle = document.getElementById('adFilterToggle');
+    if (adFilterToggle) {
+        adFilterToggle.addEventListener('change', function(e) {
+            localStorage.setItem(PLAYER_CONFIG.adFilteringStorage, e.target.checked);
+        });
+    }
 }
 
 // 重置搜索区域
@@ -171,11 +296,32 @@ async function search() {
     }
     
     showLoading();
-    const apiParams = currentApiSource === 'custom' 
-        ? '&customApi=' + encodeURIComponent(customApiUrl)
-        : '&source=' + currentApiSource;
     
     try {
+        let apiParams;
+        
+        // 处理自定义API源
+        if (currentApiSource === 'custom') {
+            // 获取可能包含多个API的字符串
+            customApiUrl = document.getElementById('customApiUrl').value.trim();
+            localStorage.setItem('customApiUrl', customApiUrl);
+            
+            if (!customApiUrl) {
+                showToast('请先设置自定义API地址', 'warning');
+                hideLoading();
+                return;
+            }
+            
+            // 检查是否有多个API (存在逗号)
+            if (customApiUrl.includes(CUSTOM_API_CONFIG.separator)) {
+                apiParams = '&customApi=' + encodeURIComponent(customApiUrl) + '&source=custom&multipleApis=true';
+            } else {
+                apiParams = '&customApi=' + encodeURIComponent(customApiUrl) + '&source=custom';
+            }
+        } else {
+            apiParams = '&source=' + currentApiSource;
+        }
+        
         // 添加超时处理
         const controller = new AbortController();
         const timeoutId = setTimeout(() => controller.abort(), 15000);
@@ -190,11 +336,23 @@ async function search() {
         
         if (data.code === 400) {
             showToast(data.msg || '搜索失败，请检查网络连接或更换数据源', 'error');
+            hideLoading();
             return;
         }
         
         // 保存搜索历史
         saveSearchHistory(query);
+        
+        // 处理搜索结果过滤：如果启用了黄色内容过滤，则过滤掉分类含有"伦理片"或"色情片"的项目
+        const yellowFilterEnabled = localStorage.getItem('yellowFilterEnabled') === 'true';
+        let results = data.list;
+        if (yellowFilterEnabled) {
+            const banned = ['伦理片', '色情片','福利视频','福利片'];
+            results = results.filter(item => {
+                const typeName = item.type_name || '';
+                return !banned.some(keyword => typeName.includes(keyword));
+            });
+        }
         
         // 显示结果区域，调整搜索区域
         document.getElementById('searchArea').classList.remove('flex-1');
@@ -203,8 +361,24 @@ async function search() {
         
         const resultsDiv = document.getElementById('results');
         
+        // 如果没有结果
+        if (!results || results.length === 0) {
+            resultsDiv.innerHTML = `
+                <div class="col-span-full text-center py-16">
+                    <svg class="mx-auto h-12 w-12 text-gray-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" 
+                              d="M9.172 16.172a4 4 0 015.656 0M9 10h.01M15 10h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                    </svg>
+                    <h3 class="mt-2 text-lg font-medium text-gray-400">没有找到匹配的结果</h3>
+                    <p class="mt-1 text-sm text-gray-500">请尝试其他关键词或更换数据源</p>
+                </div>
+            `;
+            hideLoading();
+            return;
+        }
+
         // 添加XSS保护，使用textContent和属性转义
-        resultsDiv.innerHTML = data.list.map(item => {
+        resultsDiv.innerHTML = results.map(item => {
             const safeId = item.vod_id ? item.vod_id.toString().replace(/[^\w-]/g, '') : '';
             const safeName = (item.vod_name || '').toString()
                 .replace(/</g, '&lt;')
@@ -214,18 +388,22 @@ async function search() {
                 `<span class="bg-[#222] text-xs px-2 py-1 rounded-full">${item.source_name}</span>` : '';
             const sourceCode = item.source_code || currentApiSource;
             
+            // 添加API URL属性，用于详情获取
+            const apiUrlAttr = item.api_url ? 
+                `data-api-url="${item.api_url.replace(/"/g, '&quot;')}"` : '';
+            
             // 重新设计的卡片布局 - 支持更好的封面图显示
             const hasCover = item.vod_pic && item.vod_pic.startsWith('http');
             
-            // 不同的布局设计 - 桌面端使用横向布局
+            // 不同的布局设计 - 桌面端使用横向布局，减小卡片尺寸
             return `
                 <div class="card-hover bg-[#111] rounded-lg overflow-hidden cursor-pointer transition-all hover:scale-[1.02] h-full" 
-                     onclick="showDetails('${safeId}','${safeName}','${sourceCode}')">
+                     onclick="showDetails('${safeId}','${safeName}','${sourceCode}')" ${apiUrlAttr}>
                     <div class="md:flex">
-                        <!-- 封面图区域 - 在移动端是全宽，在桌面端是固定宽度 -->
+                        <!-- 封面图区域 - 调整高度更紧凑 -->
                         ${hasCover ? `
-                        <div class="md:w-1/3 relative overflow-hidden">
-                            <div class="w-full h-48 md:h-full">
+                        <div class="md:w-1/4 relative overflow-hidden">
+                            <div class="w-full h-40 md:h-full">
                                 <img src="${item.vod_pic}" alt="${safeName}" 
                                      class="w-full h-full object-cover transition-transform hover:scale-110" 
                                      onerror="this.onerror=null; this.src='https://via.placeholder.com/300x450?text=无封面'; this.classList.add('object-contain');" 
@@ -234,31 +412,33 @@ async function search() {
                             </div>
                         </div>` : ''}
                         
-                        <!-- 内容区域 - 如果没有封面图则占据全部宽度 -->
-                        <div class="p-5 flex flex-col flex-grow ${hasCover ? 'md:w-2/3' : 'w-full'}">
+                        <!-- 内容区域 - 减小内边距 -->
+                        <div class="p-3 flex flex-col flex-grow ${hasCover ? 'md:w-3/4' : 'w-full'}">
                             <div class="flex-grow">
-                                <h3 class="text-xl font-semibold mb-3 line-clamp-2">${safeName}</h3>
-                                <div class="flex flex-wrap gap-2 mb-3">
+                                <h3 class="text-lg font-semibold mb-2 line-clamp-2">${safeName}</h3>
+                                
+                                <!-- 添加影片元数据 - 使用原始彩色标签样式，但减小间距 -->
+                                <div class="flex flex-wrap gap-1 mb-2">
                                     ${(item.type_name || '').toString().replace(/</g, '&lt;') ? 
-                                      `<span class="text-xs py-1 px-2 rounded bg-opacity-20 bg-blue-500 text-blue-300">
+                                      `<span class="text-xs py-0.5 px-1.5 rounded bg-opacity-20 bg-blue-500 text-blue-300">
                                           ${(item.type_name || '').toString().replace(/</g, '&lt;')}
                                       </span>` : ''}
                                     ${(item.vod_year || '') ? 
-                                      `<span class="text-xs py-1 px-2 rounded bg-opacity-20 bg-purple-500 text-purple-300">
+                                      `<span class="text-xs py-0.5 px-1.5 rounded bg-opacity-20 bg-purple-500 text-purple-300">
                                           ${item.vod_year}
                                       </span>` : ''}
                                 </div>
-                                <p class="text-gray-400 text-sm line-clamp-2">
+                                <p class="text-gray-400 text-xs line-clamp-2">
                                     ${(item.vod_remarks || '暂无介绍').toString().replace(/</g, '&lt;')}
                                 </p>
                             </div>
                             
-                            <!-- 底部元信息区域 -->
-                            <div class="flex justify-between items-center mt-4 pt-3 border-t border-gray-800">
+                            <!-- 底部元信息区域 - 减小上边距 -->
+                            <div class="flex justify-between items-center mt-2 pt-2 border-t border-gray-800">
                                 ${sourceInfo ? `<div>${sourceInfo}</div>` : '<div></div>'}
                                 <div>
                                     <span class="text-xs text-gray-500 flex items-center">
-                                        <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 mr-1" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                        <svg xmlns="http://www.w3.org/2000/svg" class="h-3 w-3 mr-1" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z" />
                                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
                                         </svg>
@@ -283,7 +463,7 @@ async function search() {
     }
 }
 
-// 显示详情 - 修改函数接受sourceCode参数
+// 显示详情 - 修改函数接受sourceCode参数和API URL
 async function showDetails(id, vod_name, sourceCode = currentApiSource) {
     if (!id) {
         showToast('视频ID无效', 'error');
@@ -292,19 +472,34 @@ async function showDetails(id, vod_name, sourceCode = currentApiSource) {
     
     showLoading();
     try {
-        const apiParams = sourceCode === 'custom' 
-            ? '&customApi=' + encodeURIComponent(customApiUrl)
-            : '&source=' + sourceCode;
+        // 构建API参数
+        let apiParams = '';
         
-        // 添加超时处理
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 15000);
+        // 处理自定义API源 - 如果有api_url参数，优先使用
+        if (sourceCode === 'custom') {
+            // 查找结果中包含api_url的项目
+            const apiUrl = event.currentTarget?.getAttribute('data-api-url');
+            
+            if (apiUrl) {
+                apiParams = '&customApi=' + encodeURIComponent(apiUrl);
+            } else {
+                // 回退到使用第一个可用的自定义API
+                const urls = parseCustomApiUrls();
+                if (urls.length > 0) {
+                    apiParams = '&customApi=' + encodeURIComponent(urls[0]);
+                } else {
+                    showToast('无可用的自定义API', 'error');
+                    hideLoading();
+                    return;
+                }
+            }
+            
+            apiParams += '&source=custom';
+        } else {
+            apiParams = '&source=' + sourceCode;
+        }
         
-        const response = await fetch('/api/detail?id=' + encodeURIComponent(id) + apiParams, {
-            signal: controller.signal
-        });
-        
-        clearTimeout(timeoutId);
+        const response = await fetch('/api/detail?id=' + encodeURIComponent(id) + apiParams);
         
         const data = await response.json();
         

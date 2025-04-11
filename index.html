@@ -62,6 +62,7 @@
                     <option value="wolong">卧龙资源 (wolong)</option>
                     <option value="cjhw">新华为 (cjhw)</option>
                     <option value="dbzy">豆瓣资源 (dbzy)</option>
+                    <option value="jisu">极速资源 (jisu)</option>
                     <option value="custom">自定义接口</option>
                 </select>
             
@@ -69,14 +70,39 @@
             
             <!-- 添加自定义接口输入框 -->
             <div id="customApiInput" class="hidden">
-                <label class="block text-sm font-medium text-gray-400 mb-2">自定义接口地址</label>
+                <label class="block text-sm font-medium text-gray-400 mb-2">自定义接口地址(可添加多个，用逗号分隔)</label>
                 <input 
                     type="text" 
                     id="customApiUrl" 
                     class="w-full bg-[#222] border border-[#333] text-white px-3 py-2 rounded-lg focus:outline-none focus:border-white transition-colors"
-                    placeholder="请输入接口地址..."
+                    placeholder="https://example1.com,https://example2.com..."
                 >
-                <p class="text-xs text-gray-500 mt-1">格式: https://example.com (不含最后的斜杠)</p>
+                <p class="text-xs text-gray-500 mt-1">格式: https://example1.com,https://example2.com (不含最后的斜杠)</p>
+            </div>
+            
+            <div>
+                <div class="flex items-center justify-between">
+                    <label class="text-sm font-medium text-gray-400">黄色内容过滤</label>
+                    <div class="relative inline-block w-12 align-middle select-none">
+                        <input type="checkbox" id="yellowFilterToggle" class="opacity-0 absolute w-full h-full cursor-pointer z-10">
+                        <div class="toggle-bg bg-[#333] w-12 h-6 rounded-full transition-colors duration-300 ease-in-out"></div>
+                        <div class="toggle-dot absolute w-5 h-5 bg-white rounded-full top-0.5 left-0.5 transition-transform duration-300 ease-in-out"></div>
+                    </div>
+                </div>
+                <p class="text-xs text-gray-500 mt-1">过滤分类包含"伦理片"、"色情片"等成人内容</p>
+            </div>
+            
+            <!-- 添加广告过滤开关 -->
+            <div>
+                <div class="flex items-center justify-between">
+                    <label class="text-sm font-medium text-gray-400">分片广告过滤</label>
+                    <div class="relative inline-block w-12 align-middle select-none">
+                        <input type="checkbox" id="adFilterToggle" class="opacity-0 absolute w-full h-full cursor-pointer z-10">
+                        <div class="toggle-bg bg-[#333] w-12 h-6 rounded-full transition-colors duration-300 ease-in-out"></div>
+                        <div class="toggle-dot absolute w-5 h-5 bg-white rounded-full top-0.5 left-0.5 transition-transform duration-300 ease-in-out"></div>
+                    </div>
+                </div>
+                <p class="text-xs text-gray-500 mt-1">关闭可减少旧版浏览器播放卡顿问题</p>
             </div>
             
             <div class="mt-4">
